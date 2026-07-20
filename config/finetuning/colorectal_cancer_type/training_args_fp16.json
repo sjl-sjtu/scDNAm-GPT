@@ -39,7 +39,7 @@
       "ddp_find_unused_parameters": true,
       "learning_rate": 3e-05,
       "lr_scheduler_type": "linear",
-      "warmup_steps": 10,
+      "warmup_steps": 1000,
       "metric_for_best_model": "accuracy",
       "dataloader_pin_memory": false,
       "save_safetensors": false,
