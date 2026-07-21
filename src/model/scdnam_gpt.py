@@ -250,6 +250,145 @@ class scDNAmGPTForSequenceClassification(scDNAmGPTLMHeadModelwithLoss):
         self.tie_weights()
         return load_result
 
+
+    def _validate_and_get_sep_indices(
+        self,
+        unmethy_input_ids,
+        methy_input_ids,
+        attention_mask,
+    ):
+        """
+        Validate that each input sequence starts with [BOS] and that
+        the last non-padding token is [SEP].
+    
+        Returns
+        -------
+        sep_indices : torch.LongTensor
+            Position of the [SEP] token in each sequence.
+        attention_mask : torch.BoolTensor
+            Boolean attention mask.
+        """
+    
+        # Check input dimensions
+        if unmethy_input_ids.ndim != 2 or methy_input_ids.ndim != 2:
+            raise ValueError(
+                "unmethy_input_ids and methy_input_ids must have shape "
+                "[batch_size, sequence_length]."
+            )
+    
+        if unmethy_input_ids.shape != methy_input_ids.shape:
+            raise ValueError(
+                "unmethy_input_ids and methy_input_ids must have the same shape."
+            )
+    
+        # Convert the mask to bool and move it to the same device as the inputs
+        attention_mask = attention_mask.to(
+            device=methy_input_ids.device,
+            dtype=torch.bool,
+        )
+    
+        if attention_mask.shape != methy_input_ids.shape:
+            raise ValueError(
+                "attention_mask must have the same shape as the input IDs."
+            )
+    
+        # Number of non-padding tokens in each sequence
+        sequence_lengths = attention_mask.long().sum(dim=1)
+    
+        # A valid sequence must contain at least [BOS] and [SEP]
+        invalid_length = sequence_lengths < 2
+        if invalid_length.any():
+            invalid_indices = torch.nonzero(
+                invalid_length,
+                as_tuple=False,
+            ).flatten().tolist()
+    
+            raise ValueError(
+                "Each sequence must contain at least [BOS] and [SEP]. "
+                f"Invalid batch indices: {invalid_indices}"
+            )
+    
+        # Since padding is appended to the right, the final non-padding
+        # position should correspond to [SEP]
+        sep_indices = sequence_lengths - 1
+    
+        batch_indices = torch.arange(
+            methy_input_ids.size(0),
+            device=methy_input_ids.device,
+        )
+    
+        # Ensure that the first position is not masked
+        invalid_first_mask = ~attention_mask[:, 0]
+        if invalid_first_mask.any():
+            invalid_indices = torch.nonzero(
+                invalid_first_mask,
+                as_tuple=False,
+            ).flatten().tolist()
+    
+            raise ValueError(
+                "The first token of each sequence must be a valid [BOS] token. "
+                f"Invalid batch indices: {invalid_indices}"
+            )
+    
+        # Check [BOS] in both token streams
+        invalid_bos = (
+            (unmethy_input_ids[:, 0] != self.bos_token_id)
+            | (methy_input_ids[:, 0] != self.bos_token_id)
+        )
+    
+        if invalid_bos.any():
+            invalid_indices = torch.nonzero(
+                invalid_bos,
+                as_tuple=False,
+            ).flatten().tolist()
+    
+            raise ValueError(
+                "Both unmethylated and methylated input sequences must "
+                f"start with [BOS]. Invalid batch indices: {invalid_indices}"
+            )
+    
+        # Ensure that the calculated final position is not masked
+        invalid_sep_mask = ~attention_mask[batch_indices, sep_indices]
+    
+        if invalid_sep_mask.any():
+            invalid_indices = torch.nonzero(
+                invalid_sep_mask,
+                as_tuple=False,
+            ).flatten().tolist()
+    
+            raise ValueError(
+                "The calculated [SEP] position is masked. "
+                "Please ensure that sequences use right padding. "
+                f"Invalid batch indices: {invalid_indices}"
+            )
+    
+        # Check [SEP] in both token streams
+        invalid_sep = (
+            (
+                unmethy_input_ids[batch_indices, sep_indices]
+                != self.sep_token_id
+            )
+            | (
+                methy_input_ids[batch_indices, sep_indices]
+                != self.sep_token_id
+            )
+        )
+    
+        if invalid_sep.any():
+            invalid_indices = torch.nonzero(
+                invalid_sep,
+                as_tuple=False,
+            ).flatten().tolist()
+    
+            raise ValueError(
+                "The last non-padding token of both unmethylated and "
+                "methylated input sequences must be [SEP]. "
+                f"Invalid batch indices: {invalid_indices}"
+            )
+    
+        return sep_indices, attention_mask
+    
+
     def forward(
         self,
         unmethy_input_ids,
@@ -262,6 +401,20 @@ class scDNAmGPTForSequenceClassification(scDNAmGPTLMHeadModelwithLoss):
         **kwargs,
     ):
         """Perform a forward pass of the model."""
+
+        # Construct the attention mask when it is not provided
+        if attention_mask is None:
+            attention_mask = (
+                methy_input_ids != self.pad_token_id
+            )
+    
+        # Explicitly validate [BOS] and [SEP] boundaries
+        sep_indices, attention_mask = self._validate_and_get_sep_indices(
+            unmethy_input_ids=unmethy_input_ids,
+            methy_input_ids=methy_input_ids,
+            attention_mask=attention_mask,
+        )
+        
 
         # Get layer hidden states from the backbone
         hidden_states = self.backbone(
