@@ -25,8 +25,8 @@ class scDNAmGPTLMHeadModelwithLoss(MambaLMHeadModel):
         super(scDNAmGPTLMHeadModelwithLoss, self).__init__(config, initializer_cfg, device, dtype)
 
         self.pad_token_id = tokenizer._convert_token_to_id("[PAD]")
-        self.start_token_id = tokenizer._convert_token_to_id("[BOS]")
-        self.end_token_id = tokenizer._convert_token_to_id("[SEP]")
+        self.bos_token_id = tokenizer._convert_token_to_id("[BOS]")
+        self.sep_token_id = tokenizer._convert_token_to_id("[SEP]")
         self.mask_token_id = tokenizer._convert_token_to_id("[MASK]")
         self.tokenizer = tokenizer
         self.use_dataug = use_dataug
