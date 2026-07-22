@@ -18,8 +18,8 @@ class scDNAmGPTLMHeadModelwithLoss(MambaLMHeadModel):
 
     Attributes:
         pad_token_id: Token ID for the padding token.
-        start_token_id: Token ID for the start token (e.g., [BOS]).
-        end_token_id: Token ID for the end token (e.g., [SEP]).
+        bos_token_id: Token ID for the beginning-of-sequence token ([BOS]).
+        sep_token_id: Token ID for the sequence-separator token ([SEP]).
     """
     def __init__(self, config, tokenizer, initializer_cfg=None, device=None, dtype=None, use_dataug=False):
         super(scDNAmGPTLMHeadModelwithLoss, self).__init__(config, initializer_cfg, device, dtype)
@@ -258,134 +258,125 @@ class scDNAmGPTForSequenceClassification(scDNAmGPTLMHeadModelwithLoss):
         attention_mask,
     ):
         """
-        Validate that each input sequence starts with [BOS] and that
-        the last non-padding token is [SEP].
-    
+        Validate sequence boundaries and return the position of [SEP].
+
+        Every sequence must start with [BOS], end with [SEP] at its last
+        non-padding position, and use an attention mask with the same shape as
+        the two input-ID tensors.
+
+        Parameters
+        ----------
+        unmethy_input_ids : torch.Tensor
+            Unmethylated token IDs with shape [batch_size, sequence_length].
+        methy_input_ids : torch.Tensor
+            Methylated token IDs with shape [batch_size, sequence_length].
+        attention_mask : torch.Tensor
+            Padding mask with 1/True for valid tokens and 0/False for padding.
+
         Returns
         -------
         sep_indices : torch.LongTensor
-            Position of the [SEP] token in each sequence.
+            Position of the terminal [SEP] token for every sequence.
         attention_mask : torch.BoolTensor
-            Boolean attention mask.
+            Boolean attention mask on the same device as the input tensors.
         """
-    
-        # Check input dimensions
         if unmethy_input_ids.ndim != 2 or methy_input_ids.ndim != 2:
             raise ValueError(
                 "unmethy_input_ids and methy_input_ids must have shape "
                 "[batch_size, sequence_length]."
             )
-    
+
         if unmethy_input_ids.shape != methy_input_ids.shape:
             raise ValueError(
                 "unmethy_input_ids and methy_input_ids must have the same shape."
             )
-    
-        # Convert the mask to bool and move it to the same device as the inputs
+
+        if attention_mask is None:
+            raise ValueError("attention_mask must not be None during validation.")
+
+        if attention_mask.shape != methy_input_ids.shape:
+            raise ValueError(
+                "attention_mask must have the same shape as the input-ID tensors."
+            )
+
         attention_mask = attention_mask.to(
             device=methy_input_ids.device,
             dtype=torch.bool,
         )
-    
-        if attention_mask.shape != methy_input_ids.shape:
-            raise ValueError(
-                "attention_mask must have the same shape as the input IDs."
-            )
-    
-        # Number of non-padding tokens in each sequence
+
         sequence_lengths = attention_mask.long().sum(dim=1)
-    
-        # A valid sequence must contain at least [BOS] and [SEP]
         invalid_length = sequence_lengths < 2
         if invalid_length.any():
             invalid_indices = torch.nonzero(
                 invalid_length,
                 as_tuple=False,
             ).flatten().tolist()
-    
             raise ValueError(
                 "Each sequence must contain at least [BOS] and [SEP]. "
                 f"Invalid batch indices: {invalid_indices}"
             )
-    
-        # Since padding is appended to the right, the final non-padding
-        # position should correspond to [SEP]
+
+        # The dataset/collator uses right padding, so the final valid token is
+        # located at sequence_length - 1 for each sequence.
         sep_indices = sequence_lengths - 1
-    
         batch_indices = torch.arange(
             methy_input_ids.size(0),
             device=methy_input_ids.device,
         )
-    
-        # Ensure that the first position is not masked
+
         invalid_first_mask = ~attention_mask[:, 0]
         if invalid_first_mask.any():
             invalid_indices = torch.nonzero(
                 invalid_first_mask,
                 as_tuple=False,
             ).flatten().tolist()
-    
             raise ValueError(
-                "The first token of each sequence must be a valid [BOS] token. "
-                f"Invalid batch indices: {invalid_indices}"
+                "The first position of every sequence must be a valid [BOS] "
+                f"token. Invalid batch indices: {invalid_indices}"
             )
-    
-        # Check [BOS] in both token streams
+
         invalid_bos = (
             (unmethy_input_ids[:, 0] != self.bos_token_id)
             | (methy_input_ids[:, 0] != self.bos_token_id)
         )
-    
         if invalid_bos.any():
             invalid_indices = torch.nonzero(
                 invalid_bos,
                 as_tuple=False,
             ).flatten().tolist()
-    
             raise ValueError(
-                "Both unmethylated and methylated input sequences must "
-                f"start with [BOS]. Invalid batch indices: {invalid_indices}"
+                "Both unmethylated and methylated input sequences must start "
+                f"with [BOS]. Invalid batch indices: {invalid_indices}"
             )
-    
-        # Ensure that the calculated final position is not masked
+
         invalid_sep_mask = ~attention_mask[batch_indices, sep_indices]
-    
         if invalid_sep_mask.any():
             invalid_indices = torch.nonzero(
                 invalid_sep_mask,
                 as_tuple=False,
             ).flatten().tolist()
-    
             raise ValueError(
-                "The calculated [SEP] position is masked. "
-                "Please ensure that sequences use right padding. "
+                "The calculated terminal position is masked. Ensure that "
+                "attention_mask uses right padding. "
                 f"Invalid batch indices: {invalid_indices}"
             )
-    
-        # Check [SEP] in both token streams
+
         invalid_sep = (
-            (
-                unmethy_input_ids[batch_indices, sep_indices]
-                != self.sep_token_id
-            )
-            | (
-                methy_input_ids[batch_indices, sep_indices]
-                != self.sep_token_id
-            )
+            unmethy_input_ids[batch_indices, sep_indices] != self.sep_token_id
+        ) | (
+            methy_input_ids[batch_indices, sep_indices] != self.sep_token_id
         )
-    
         if invalid_sep.any():
             invalid_indices = torch.nonzero(
                 invalid_sep,
                 as_tuple=False,
             ).flatten().tolist()
-    
             raise ValueError(
                 "The last non-padding token of both unmethylated and "
                 "methylated input sequences must be [SEP]. "
                 f"Invalid batch indices: {invalid_indices}"
             )
-    
+
         return sep_indices, attention_mask
     
 
@@ -400,108 +391,136 @@ class scDNAmGPTForSequenceClassification(scDNAmGPTLMHeadModelwithLoss):
         return_dict: Optional[bool] = None,
         **kwargs,
     ):
-        """Perform a forward pass of the model."""
-
-        # Construct the attention mask when it is not provided
+        """Perform a forward pass of the sequence-classification model."""
         if attention_mask is None:
-            attention_mask = (
-                methy_input_ids != self.pad_token_id
-            )
-    
-        # Explicitly validate [BOS] and [SEP] boundaries
+            attention_mask = methy_input_ids != self.pad_token_id
+
+        # Explicitly verify that each sequence starts with [BOS] and that its
+        # last non-padding position contains [SEP]. The validated [SEP] state
+        # is used as the cross-attention query below.
         sep_indices, attention_mask = self._validate_and_get_sep_indices(
             unmethy_input_ids=unmethy_input_ids,
             methy_input_ids=methy_input_ids,
             attention_mask=attention_mask,
         )
-        
 
-        # Get layer hidden states from the backbone
         hidden_states = self.backbone(
-            unmethy_input_ids, methy_input_ids, methy_ratios,
+            unmethy_input_ids,
+            methy_input_ids,
+            methy_ratios,
             inference_params=inference_params,
-            need_layer_hidden_states=(self.need_layer_hidden_states or self.cross_attn_every_hidden_states),
+            need_layer_hidden_states=(
+                self.need_layer_hidden_states
+                or self.cross_attn_every_hidden_states
+            ),
             **kwargs,
         )
-        
+
         if self.need_layer_hidden_states or self.cross_attn_every_hidden_states:
             hidden_states, layer_hidden_states = hidden_states
-        
-        # Handle attention mask
-        if attention_mask is None:
-            attention_mask = (methy_input_ids != self.pad_token_id).int()
 
         if self.cross_attn_every_hidden_states:
-            last_non_padding_indices = attention_mask.sum(dim=1) - 1
-            batch_size, seq_len, embed_dim = layer_hidden_states[0].size()
+            batch_size = layer_hidden_states[0].size(0)
+            batch_indices = torch.arange(
+                batch_size,
+                device=layer_hidden_states[0].device,
+            )
+            key_padding_mask = ~attention_mask
 
-            # Initialize list to store attention outputs for each layer
-            norm_attn_outputs, attn_weights = [], []
-            
-            # Iterate through each layer's hidden state and apply attention separately
-            layer_hidden_states = layer_hidden_states[:-2] + layer_hidden_states[-1:]
-            for i, hidden_states in enumerate(layer_hidden_states):
+            norm_attn_outputs = []
+            attn_weights = []
 
-                # Extract the CLS token states for each sequence and apply attention
-                cls_token_states = hidden_states[torch.arange(batch_size), last_non_padding_indices]
-                key_padding_mask = ~attention_mask.bool()
+            # Preserve the original selection of backbone hidden states.
+            layer_hidden_states = (
+                layer_hidden_states[:-2] + layer_hidden_states[-1:]
+            )
 
-                if hasattr(self, "query_proj") or hasattr(self, "query_proj_layers"):
-                    q_proj = self.query_proj_layers[i](cls_token_states.unsqueeze(1))
-                    k_proj = self.key_proj_layers[i](hidden_states)
-                    v_proj = self.value_proj_layers[i](hidden_states)
+            for i, current_hidden_states in enumerate(layer_hidden_states):
+                # Use the validated terminal [SEP] hidden state as the query.
+                sep_token_states = current_hidden_states[
+                    batch_indices,
+                    sep_indices,
+                ]
+
+                if hasattr(self, "query_proj_layers"):
+                    q_proj = self.query_proj_layers[i](
+                        sep_token_states.unsqueeze(1)
+                    )
+                    k_proj = self.key_proj_layers[i](current_hidden_states)
+                    v_proj = self.value_proj_layers[i](current_hidden_states)
                 else:
-                    q_proj = cls_token_states.unsqueeze(1)
-                    k_proj = hidden_states
-                    v_proj = hidden_states
-                
-                # Apply attention independently for this layer
-                attn_output, attn_weight = self.attention_layers[i](q_proj, k_proj, v_proj, key_padding_mask=key_padding_mask)
+                    q_proj = sep_token_states.unsqueeze(1)
+                    k_proj = current_hidden_states
+                    v_proj = current_hidden_states
 
-                # Store the attention output for this layer
+                attn_output, attn_weight = self.attention_layers[i](
+                    q_proj,
+                    k_proj,
+                    v_proj,
+                    key_padding_mask=key_padding_mask,
+                )
+
                 norm_attn_outputs.append(self.norm(attn_output))
                 attn_weights.append(attn_weight)
-            
-            if return_dict:
-                norm_attn_outputs_for_save = torch.cat(norm_attn_outputs, dim=1)
-                
-            # Aggregate the attention outputs (e.g., sum or average across layers)
-            norm_attn_outputs = torch.sum(torch.cat(norm_attn_outputs, dim=1), dim=1)
-            attn_weights = torch.cat(attn_weights, dim=1) #.permute(1, 0, 2)
-        
-        else:
-            last_non_padding_indices = attention_mask.sum(dim=1) - 1
-            batch_size, seq_len, embed_dim = hidden_states.size()
-            cls_token_states = hidden_states[torch.arange(batch_size), last_non_padding_indices]
-            # print(cls_token_states.shape, "cls_token_states!!!!!!!!!!!!!!!!")
 
-            key_padding_mask = ~attention_mask.bool()
+            if return_dict:
+                norm_attn_outputs_for_save = torch.cat(
+                    norm_attn_outputs,
+                    dim=1,
+                )
+
+            norm_attn_outputs = torch.sum(
+                torch.cat(norm_attn_outputs, dim=1),
+                dim=1,
+            )
+            attn_weights = torch.cat(attn_weights, dim=1)
+
+        else:
+            batch_size = hidden_states.size(0)
+            batch_indices = torch.arange(
+                batch_size,
+                device=hidden_states.device,
+            )
+
+            # Use the validated terminal [SEP] hidden state as the query.
+            sep_token_states = hidden_states[
+                batch_indices,
+                sep_indices,
+            ]
+            key_padding_mask = ~attention_mask
 
             if hasattr(self, "query_proj"):
-                q_proj = self.query_proj(cls_token_states.unsqueeze(1))
+                q_proj = self.query_proj(sep_token_states.unsqueeze(1))
                 k_proj = self.key_proj(hidden_states)
                 v_proj = self.value_proj(hidden_states)
             else:
-                q_proj = cls_token_states.unsqueeze(1)
+                q_proj = sep_token_states.unsqueeze(1)
                 k_proj = hidden_states
                 v_proj = hidden_states
 
-            attn_output, attn_weights = self.attention(q_proj, k_proj, v_proj, key_padding_mask=key_padding_mask)
+            attn_output, attn_weights = self.attention(
+                q_proj,
+                k_proj,
+                v_proj,
+                key_padding_mask=key_padding_mask,
+            )
             attn_output = attn_output.squeeze(1)
-
             norm_attn_outputs = self.norm(attn_output)
+
             if return_dict:
                 norm_attn_outputs_for_save = norm_attn_outputs
-        
-        # Classify using the normalized attention output
+
         logits = self.classify(norm_attn_outputs)
 
-        loss = nn.CrossEntropyLoss()(logits, labels)
+        if labels is not None:
+            loss_fn = nn.CrossEntropyLoss()
+            loss = loss_fn(logits, labels)
+        else:
+            loss = None
 
-        # Return the result based on return_dict flag
         if not return_dict:
             return (loss, logits) if loss is not None else (logits,)
-        # print("!!!!!!!!!!!!!!!!!!", logits.shape)
+
         return {
             "logits": logits,
             "labels": labels,
@@ -547,101 +566,133 @@ class scDNAmGPTForPredictscRNAseq(scDNAmGPTForSequenceClassification):
         return_dict: Optional[bool] = None,
         **kwargs,
     ):
-        """Perform a forward pass of the model."""
-        # Get layer hidden states from the backbone
+        """Perform a forward pass of the gene-expression prediction model."""
+        if attention_mask is None:
+            attention_mask = methy_input_ids != self.pad_token_id
+
+        # This subclass defines its own forward method, so boundary validation
+        # must also be invoked explicitly here.
+        sep_indices, attention_mask = self._validate_and_get_sep_indices(
+            unmethy_input_ids=unmethy_input_ids,
+            methy_input_ids=methy_input_ids,
+            attention_mask=attention_mask,
+        )
+
         hidden_states = self.backbone(
-            unmethy_input_ids, methy_input_ids, methy_ratios,
+            unmethy_input_ids,
+            methy_input_ids,
+            methy_ratios,
             inference_params=inference_params,
-            need_layer_hidden_states=(self.need_layer_hidden_states or self.cross_attn_every_hidden_states),
+            need_layer_hidden_states=(
+                self.need_layer_hidden_states
+                or self.cross_attn_every_hidden_states
+            ),
             **kwargs,
         )
-        
+
         if self.need_layer_hidden_states or self.cross_attn_every_hidden_states:
             hidden_states, layer_hidden_states = hidden_states
-        
-        # Handle attention mask
-        if attention_mask is None:
-            attention_mask = (methy_input_ids != self.pad_token_id).int()
-
 
         if self.cross_attn_every_hidden_states:
-            last_non_padding_indices = attention_mask.sum(dim=1) - 1
-            batch_size, seq_len, embed_dim = layer_hidden_states[0].size()
+            batch_size = layer_hidden_states[0].size(0)
+            batch_indices = torch.arange(
+                batch_size,
+                device=layer_hidden_states[0].device,
+            )
+            key_padding_mask = ~attention_mask
 
-            # Initialize list to store attention outputs for each layer
-            norm_attn_outputs, attn_weights = [], []
-            
-            # Iterate through each layer's hidden state and apply attention separately
-            layer_hidden_states = layer_hidden_states[:-2] + layer_hidden_states[-1:]
-            for i, hidden_states in enumerate(layer_hidden_states):
+            norm_attn_outputs = []
+            attn_weights = []
 
-                # Extract the CLS token states for each sequence and apply attention
-                cls_token_states = hidden_states[torch.arange(batch_size), last_non_padding_indices]
-                key_padding_mask = ~attention_mask.bool()
-                # print(cls_token_states.shape, "cls_token_states!!!!!!!!!!!!!!!!")
+            # Preserve the original selection of backbone hidden states.
+            layer_hidden_states = (
+                layer_hidden_states[:-2] + layer_hidden_states[-1:]
+            )
 
-                if hasattr(self, "query_proj") or hasattr(self, "query_proj_layers"):
-                    q_proj = self.query_proj_layers[i](cls_token_states.unsqueeze(1))
-                    k_proj = self.key_proj_layers[i](hidden_states)
-                    v_proj = self.value_proj_layers[i](hidden_states)
+            for i, current_hidden_states in enumerate(layer_hidden_states):
+                # Use the validated terminal [SEP] hidden state as the query.
+                sep_token_states = current_hidden_states[
+                    batch_indices,
+                    sep_indices,
+                ]
+
+                if hasattr(self, "query_proj_layers"):
+                    q_proj = self.query_proj_layers[i](
+                        sep_token_states.unsqueeze(1)
+                    )
+                    k_proj = self.key_proj_layers[i](current_hidden_states)
+                    v_proj = self.value_proj_layers[i](current_hidden_states)
                 else:
-                    q_proj = cls_token_states.unsqueeze(1)
-                    k_proj = hidden_states
-                    v_proj = hidden_states
-                
-                # Apply attention independently for this layer
-                attn_output, attn_weight = self.attention_layers[i](q_proj, k_proj, v_proj, key_padding_mask=key_padding_mask)
-                # print(attn_output.shape, "attn_output!!!!!!!!!!!!!!!!")
+                    q_proj = sep_token_states.unsqueeze(1)
+                    k_proj = current_hidden_states
+                    v_proj = current_hidden_states
 
-                # Store the attention output for this layer
+                attn_output, attn_weight = self.attention_layers[i](
+                    q_proj,
+                    k_proj,
+                    v_proj,
+                    key_padding_mask=key_padding_mask,
+                )
+
                 norm_attn_outputs.append(self.norm(attn_output))
                 attn_weights.append(attn_weight)
-            
-            if return_dict:
-                norm_attn_outputs_for_save = torch.cat(norm_attn_outputs, dim=1)
-                
-            # Aggregate the attention outputs (e.g., sum or average across layers)
-            norm_attn_outputs = torch.sum(torch.cat(norm_attn_outputs, dim=1), dim=1)
-            attn_weights = torch.cat(attn_weights, dim=1) #.permute(1, 0, 2)
-        
-        else:
-            last_non_padding_indices = attention_mask.sum(dim=1) - 1
-            batch_size, seq_len, embed_dim = hidden_states.size()
-            cls_token_states = hidden_states[torch.arange(batch_size), last_non_padding_indices]
-            # print(cls_token_states.shape, "cls_token_states!!!!!!!!!!!!!!!!")
 
-            key_padding_mask = ~attention_mask.bool()
+            if return_dict:
+                norm_attn_outputs_for_save = torch.cat(
+                    norm_attn_outputs,
+                    dim=1,
+                )
+
+            norm_attn_outputs = torch.sum(
+                torch.cat(norm_attn_outputs, dim=1),
+                dim=1,
+            )
+            attn_weights = torch.cat(attn_weights, dim=1)
+
+        else:
+            batch_size = hidden_states.size(0)
+            batch_indices = torch.arange(
+                batch_size,
+                device=hidden_states.device,
+            )
+
+            # Use the validated terminal [SEP] hidden state as the query.
+            sep_token_states = hidden_states[
+                batch_indices,
+                sep_indices,
+            ]
+            key_padding_mask = ~attention_mask
 
             if hasattr(self, "query_proj"):
-                q_proj = self.query_proj(cls_token_states.unsqueeze(1))
+                q_proj = self.query_proj(sep_token_states.unsqueeze(1))
                 k_proj = self.key_proj(hidden_states)
                 v_proj = self.value_proj(hidden_states)
             else:
-                q_proj = cls_token_states.unsqueeze(1)
+                q_proj = sep_token_states.unsqueeze(1)
                 k_proj = hidden_states
                 v_proj = hidden_states
 
-            attn_output, attn_weights = self.attention(q_proj, k_proj, v_proj, key_padding_mask=key_padding_mask)
+            attn_output, attn_weights = self.attention(
+                q_proj,
+                k_proj,
+                v_proj,
+                key_padding_mask=key_padding_mask,
+            )
             attn_output = attn_output.squeeze(1)
-
             norm_attn_outputs = self.norm(attn_output)
+
             if return_dict:
                 norm_attn_outputs_for_save = norm_attn_outputs
-        
-        # Classify using the normalized attention output
-        logits = self.classify(norm_attn_outputs)
-        
-        # Apply sigmoid to ensure the output is between 0 and 1
-        predicted_probs = logits 
 
-        # MSELoss
+        logits = self.classify(norm_attn_outputs)
+        predicted_probs = logits
+
         if labels is not None:
             loss_fn = nn.MSELoss()
             loss = loss_fn(predicted_probs, labels)
         else:
             loss = None
 
-        # Return the result based on return_dict flag
         if not return_dict:
             return (loss, logits) if loss is not None else (logits,)
 
