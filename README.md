@@ -1,15 +1,15 @@
 <div align="center" style="margin: 0; padding: 0;">
-  <h1 style="margin: 0; padding: 0;">🧬 scDNAm-GPT</h1>
+  <h1 style="margin: 0; padding: 0;">🧬 scDNAm-GPM</h1>
   <p style="margin-top: 0; font-size: 0.95rem; color: #555;">
     (formerly known internally as <code>scWGBS-GPM</code>)
   </p>
   <img src="pic/scWGBS-GPT.png" width="240" style="display: block; margin: 0 auto;"/>
   <p>
-    A Foundation Model for Analyzing Single-Cell Whole-Genome Bisulfite Sequencing
+    A Generative Language Mamba for Analyzing Single-Cell Whole-Genome Bisulfite Sequencing
   </p>
   <p style="max-width: 720px; margin: 0 auto; font-size: 0.95rem; color: #333;">
     The new version of paper is updating! This is the version we updated internally in the previous quarter. This version is more complete, as evidenced by polished writing and beautified images.
-    The title of the manuscript has been changed, and the model name has been updated from <strong>scWGBS-GPT</strong> to <strong>scDNAm-GPM</strong>. [2026/07/21]
+    The title of the manuscript has been changed, and the model name has been updated from <strong>scWGBS-GPM</strong> to <strong>scDNAm-GPM</strong>. [2026/07/21]
   </p>
   <p>
     📄 <a href="https://www.biorxiv.org/content/10.1101/2025.02.19.638959v3" target="_blank">
