@@ -1,7 +1,7 @@
 <div align="center" style="margin: 0; padding: 0;">
   <h1 style="margin: 0; padding: 0;">🧬 scDNAm-GPM</h1>
   <p style="margin-top: 0; font-size: 0.95rem; color: #555;">
-    (formerly known internally as <code>scWGBS-GPM</code>)
+    (formerly known internally as <code>scWGBS-GPT</code>)
   </p>
   <img src="pic/scWGBS-GPT.png" width="240" style="display: block; margin: 0 auto;"/>
   <p>
